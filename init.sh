@@ -152,6 +152,50 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 2b. nvm + Node.js
+# -----------------------------------------------------------------------------
+NVM_DIR="${TARGET_HOME}/.nvm"
+
+log "nvm + Node.js"
+if [[ -d "${NVM_DIR}" ]]; then
+  echo "Already installed at ${NVM_DIR}, skipping..."
+else
+  echo "Installing nvm..."
+  as_user bash -c "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash"
+  echo "Installing latest LTS Node.js..."
+  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && nvm install --lts"
+  echo "nvm + Node.js installed!"
+fi
+
+# -----------------------------------------------------------------------------
+# 2c. Claude Code
+# -----------------------------------------------------------------------------
+log "Claude Code"
+if ! [[ -s "${NVM_DIR}/nvm.sh" ]]; then
+  echo "nvm not found at ${NVM_DIR}, skipping Claude Code install..."
+elif as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && command -v claude" &>/dev/null; then
+  echo "Already installed, skipping..."
+else
+  echo "Installing Claude Code..."
+  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm install -g @anthropic-ai/claude-code"
+  echo "Claude Code installed!"
+fi
+
+# -----------------------------------------------------------------------------
+# 2d. oh-my-claude-sisyphus
+# -----------------------------------------------------------------------------
+log "oh-my-claude-sisyphus"
+if ! [[ -s "${NVM_DIR}/nvm.sh" ]]; then
+  echo "nvm not found at ${NVM_DIR}, skipping..."
+elif as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm list -g oh-my-claude-sisyphus" &>/dev/null; then
+  echo "Already installed, skipping..."
+else
+  echo "Installing oh-my-claude-sisyphus..."
+  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm install -g oh-my-claude-sisyphus"
+  echo "oh-my-claude-sisyphus installed!"
+fi
+
+# -----------------------------------------------------------------------------
 # 3. Oh My Zsh
 # -----------------------------------------------------------------------------
 log "Oh My Zsh"
@@ -239,6 +283,11 @@ elif command -v exa >/dev/null 2>&1; then
   alias lt='exa -T --icons'
 fi
 
+# ==== nvm ====
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
+
 # ==== ZSH Plugins ====
 export ZSH_AUTOSUGGEST_USE_ASYNC=0
 
@@ -291,6 +340,10 @@ echo "Verifying installation..."
 echo "  ✓ Zsh: $(zsh --version)"
 echo "  ✓ Oh My Zsh: $([ -d ~/.oh-my-zsh ] && echo 'Installed' || echo 'Not found')"
 echo "  ✓ Conda: $(command -v conda >/dev/null && conda --version || echo 'Not found')"
+echo "  ✓ nvm: $(command -v nvm >/dev/null && nvm --version || echo 'Not found')"
+echo "  ✓ Node.js: $(command -v node >/dev/null && node --version || echo 'Not found')"
+echo "  ✓ npm: $(command -v npm >/dev/null && npm --version || echo 'Not found')"
+echo "  ✓ Claude Code: $(command -v claude >/dev/null && claude --version || echo 'Not found')"
 echo "  ✓ eza: $(command -v eza >/dev/null && eza --version | head -1 || echo 'Not found')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
 echo "  ✓ Simplerich: $([ -d ~/.oh-my-zsh/custom/themes/simplerich-zsh-theme ] && echo 'Installed' || echo 'Not found')"
