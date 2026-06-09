@@ -107,6 +107,61 @@ install_ls_icons_tool() {
   echo "Installed eza to /usr/local/bin/eza"
 }
 
+# -----------------------------------------------------------------------------
+# Install zellij (terminal multiplexer) from the latest GitHub release
+# -----------------------------------------------------------------------------
+install_zellij() {
+  if command -v zellij >/dev/null 2>&1; then
+    echo "zellij already installed, skipping..."
+    return 0
+  fi
+
+  log "Installing zellij"
+
+  local arch asset url tmpdir bin
+  arch="$(uname -m)"
+
+  case "${arch}" in
+    x86_64|amd64)  asset="zellij-x86_64-unknown-linux-musl.tar.gz" ;;
+    aarch64|arm64) asset="zellij-aarch64-unknown-linux-musl.tar.gz" ;;
+    *)
+      echo "Warning: unsupported architecture (${arch}). Skipping zellij install."
+      return 0
+      ;;
+  esac
+
+  url="https://github.com/zellij-org/zellij/releases/latest/download/${asset}"
+  tmpdir="$(mktemp -d)"
+
+  if ! curl -LfsS --retry 8 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 10 --max-time 180 "${url}" -o "${tmpdir}/zellij.tar.gz"; then
+    echo "Warning: GitHub download failed. Skipping zellij install."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  if ! tar -xzf "${tmpdir}/zellij.tar.gz" -C "${tmpdir}"; then
+    echo "Warning: failed to extract zellij. Skipping."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  bin="${tmpdir}/zellij"
+  if [[ ! -x "${bin}" ]]; then
+    bin="$(find "${tmpdir}" -maxdepth 3 -type f -name zellij 2>/dev/null | head -n 1 || true)"
+  fi
+
+  if [[ -z "${bin:-}" || ! -f "${bin}" ]]; then
+    echo "Warning: failed to locate zellij binary. Skipping."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  ${SUDO} install -m 0755 "${bin}" /usr/local/bin/zellij
+  rm -rf "${tmpdir}"
+  echo "Installed zellij to /usr/local/bin/zellij"
+}
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -124,6 +179,7 @@ log "Installing packages"
 ${SUDO} apt install -y nano zsh git curl wget ca-certificates tar bc
 
 install_ls_icons_tool
+install_zellij
 
 # Check for distro-packaged zsh plugins
 USE_DISTRO_PLUGINS=0
@@ -152,12 +208,17 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+<<<<<<< HEAD
 # 2b. nvm + Node.js
+=======
+# 2b. nvm + Node.js (npm bundled)
+>>>>>>> e42d01e (d)
 # -----------------------------------------------------------------------------
 NVM_DIR="${TARGET_HOME}/.nvm"
 
 log "nvm + Node.js"
 if [[ -d "${NVM_DIR}" ]]; then
+<<<<<<< HEAD
   echo "Already installed at ${NVM_DIR}, skipping..."
 else
   echo "Installing nvm..."
@@ -194,6 +255,22 @@ else
   as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm install -g oh-my-claude-sisyphus"
   echo "oh-my-claude-sisyphus installed!"
 fi
+=======
+  echo "nvm already installed at ${NVM_DIR}, skipping install..."
+else
+  echo "Installing nvm..."
+  as_user env HOME="${TARGET_HOME}" PROFILE=/dev/null \
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh)"
+fi
+
+# Install latest LTS Node (npm comes bundled)
+as_user env HOME="${TARGET_HOME}" NVM_DIR="${NVM_DIR}" bash -c '
+  . "$NVM_DIR/nvm.sh"
+  nvm install --lts
+  nvm alias default "lts/*"
+  echo "node: $(node -v), npm: $(npm -v)"
+'
+>>>>>>> e42d01e (d)
 
 # -----------------------------------------------------------------------------
 # 3. Oh My Zsh
@@ -283,10 +360,17 @@ elif command -v exa >/dev/null 2>&1; then
   alias lt='exa -T --icons'
 fi
 
+<<<<<<< HEAD
 # ==== nvm ====
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
+=======
+# ==== nvm (Node Version Manager) ====
+export NVM_DIR="$HOME/.nvm"
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+[[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
+>>>>>>> e42d01e (d)
 
 # ==== ZSH Plugins ====
 export ZSH_AUTOSUGGEST_USE_ASYNC=0
@@ -340,11 +424,18 @@ echo "Verifying installation..."
 echo "  ✓ Zsh: $(zsh --version)"
 echo "  ✓ Oh My Zsh: $([ -d ~/.oh-my-zsh ] && echo 'Installed' || echo 'Not found')"
 echo "  ✓ Conda: $(command -v conda >/dev/null && conda --version || echo 'Not found')"
+<<<<<<< HEAD
 echo "  ✓ nvm: $(command -v nvm >/dev/null && nvm --version || echo 'Not found')"
 echo "  ✓ Node.js: $(command -v node >/dev/null && node --version || echo 'Not found')"
 echo "  ✓ npm: $(command -v npm >/dev/null && npm --version || echo 'Not found')"
 echo "  ✓ Claude Code: $(command -v claude >/dev/null && claude --version || echo 'Not found')"
+=======
+echo "  ✓ nvm: $([ -s ~/.nvm/nvm.sh ] && echo 'Installed' || echo 'Not found')"
+echo "  ✓ Node: $(command -v node >/dev/null && node -v || echo 'Not found')"
+echo "  ✓ npm: $(command -v npm >/dev/null && npm -v || echo 'Not found')"
+>>>>>>> e42d01e (d)
 echo "  ✓ eza: $(command -v eza >/dev/null && eza --version | head -1 || echo 'Not found')"
+echo "  ✓ zellij: $(command -v zellij >/dev/null && zellij --version || echo 'Not found')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
 echo "  ✓ Simplerich: $([ -d ~/.oh-my-zsh/custom/themes/simplerich-zsh-theme ] && echo 'Installed' || echo 'Not found')"
 VERIFY_EOF
