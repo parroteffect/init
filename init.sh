@@ -3,8 +3,9 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # =============================================================================
-# System Initialization Script v4.2
-# - Installs: zsh, oh-my-zsh, miniconda, eza, zsh plugins
+# System Initialization Script v4.3
+# - Installs: zsh, oh-my-zsh, miniconda, nvm + Node.js LTS, eza/exa, zellij,
+#             zsh-autosuggestions, zsh-syntax-highlighting
 # - Theme: simplerich (customized from github.com/parroteffect/zsh-theme)
 # =============================================================================
 
@@ -60,14 +61,14 @@ install_ls_icons_tool() {
   fi
 
   # Fallback: download from GitHub
-  echo "apt couldn't install eza/exa; trying GitHub release..."
+  echo "apt could not install eza/exa; trying GitHub release..."
 
   local arch asset url tmpdir bin
   arch="$(uname -m)"
 
   case "${arch}" in
-    x86_64|amd64)   asset="eza_x86_64-unknown-linux-gnu.tar.gz" ;;
-    aarch64|arm64)  asset="eza_aarch64-unknown-linux-gnu.tar.gz" ;;
+    x86_64|amd64) asset="eza_x86_64-unknown-linux-gnu.tar.gz" ;;
+    aarch64|arm64) asset="eza_aarch64-unknown-linux-gnu.tar.gz" ;;
     armv7l|armv7|armhf) asset="eza_arm-unknown-linux-gnueabihf.tar.gz" ;;
     *)
       echo "Warning: unsupported architecture (${arch}). Skipping eza install."
@@ -122,7 +123,7 @@ install_zellij() {
   arch="$(uname -m)"
 
   case "${arch}" in
-    x86_64|amd64)  asset="zellij-x86_64-unknown-linux-musl.tar.gz" ;;
+    x86_64|amd64) asset="zellij-x86_64-unknown-linux-musl.tar.gz" ;;
     aarch64|arm64) asset="zellij-aarch64-unknown-linux-musl.tar.gz" ;;
     *)
       echo "Warning: unsupported architecture (${arch}). Skipping zellij install."
@@ -208,54 +209,12 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-<<<<<<< HEAD
-# 2b. nvm + Node.js
-=======
-# 2b. nvm + Node.js (npm bundled)
->>>>>>> e42d01e (d)
+# 2b. nvm + Node.js LTS (npm bundled)
 # -----------------------------------------------------------------------------
 NVM_DIR="${TARGET_HOME}/.nvm"
 
 log "nvm + Node.js"
 if [[ -d "${NVM_DIR}" ]]; then
-<<<<<<< HEAD
-  echo "Already installed at ${NVM_DIR}, skipping..."
-else
-  echo "Installing nvm..."
-  as_user bash -c "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash"
-  echo "Installing latest LTS Node.js..."
-  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && nvm install --lts"
-  echo "nvm + Node.js installed!"
-fi
-
-# -----------------------------------------------------------------------------
-# 2c. Claude Code
-# -----------------------------------------------------------------------------
-log "Claude Code"
-if ! [[ -s "${NVM_DIR}/nvm.sh" ]]; then
-  echo "nvm not found at ${NVM_DIR}, skipping Claude Code install..."
-elif as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && command -v claude" &>/dev/null; then
-  echo "Already installed, skipping..."
-else
-  echo "Installing Claude Code..."
-  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm install -g @anthropic-ai/claude-code"
-  echo "Claude Code installed!"
-fi
-
-# -----------------------------------------------------------------------------
-# 2d. oh-my-claude-sisyphus
-# -----------------------------------------------------------------------------
-log "oh-my-claude-sisyphus"
-if ! [[ -s "${NVM_DIR}/nvm.sh" ]]; then
-  echo "nvm not found at ${NVM_DIR}, skipping..."
-elif as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm list -g oh-my-claude-sisyphus" &>/dev/null; then
-  echo "Already installed, skipping..."
-else
-  echo "Installing oh-my-claude-sisyphus..."
-  as_user bash -c "source \"${NVM_DIR}/nvm.sh\" && npm install -g oh-my-claude-sisyphus"
-  echo "oh-my-claude-sisyphus installed!"
-fi
-=======
   echo "nvm already installed at ${NVM_DIR}, skipping install..."
 else
   echo "Installing nvm..."
@@ -263,14 +222,14 @@ else
     bash -c "$(curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh)"
 fi
 
-# Install latest LTS Node (npm comes bundled)
+echo "Installing latest LTS Node.js..."
 as_user env HOME="${TARGET_HOME}" NVM_DIR="${NVM_DIR}" bash -c '
+  set -e
   . "$NVM_DIR/nvm.sh"
   nvm install --lts
   nvm alias default "lts/*"
   echo "node: $(node -v), npm: $(npm -v)"
 '
->>>>>>> e42d01e (d)
 
 # -----------------------------------------------------------------------------
 # 3. Oh My Zsh
@@ -298,6 +257,7 @@ if [[ -d "${SIMPLERICH_DIR}" ]]; then
   rm -rf "${SIMPLERICH_DIR}"
 fi
 
+as_user mkdir -p "${ZSH_CUSTOM}/themes"
 as_user git clone --recursive --depth=1 https://github.com/parroteffect/zsh-theme "${SIMPLERICH_DIR}"
 as_user cp "${SIMPLERICH_DIR}/simplerich.zsh-theme" "${TARGET_HOME}/.oh-my-zsh/themes/"
 echo "Theme installed!"
@@ -360,17 +320,10 @@ elif command -v exa >/dev/null 2>&1; then
   alias lt='exa -T --icons'
 fi
 
-<<<<<<< HEAD
-# ==== nvm ====
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
-=======
 # ==== nvm (Node Version Manager) ====
 export NVM_DIR="$HOME/.nvm"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion"
->>>>>>> e42d01e (d)
 
 # ==== ZSH Plugins ====
 export ZSH_AUTOSUGGEST_USE_ASYNC=0
@@ -397,10 +350,14 @@ rm -f "${TMP_ZSHRC}"
 # 7. Conda initialization
 # -----------------------------------------------------------------------------
 log "Initializing conda"
-as_user "${CONDA_DIR}/bin/conda" init bash >/dev/null || true
-as_user "${CONDA_DIR}/bin/conda" init zsh  >/dev/null || true
-as_user "${CONDA_DIR}/bin/conda" config --set auto_activate_base true >/dev/null || true
-as_user "${CONDA_DIR}/bin/conda" config --set changeps1 false >/dev/null || true
+if [[ -x "${CONDA_DIR}/bin/conda" ]]; then
+  as_user "${CONDA_DIR}/bin/conda" init bash >/dev/null || true
+  as_user "${CONDA_DIR}/bin/conda" init zsh  >/dev/null || true
+  as_user "${CONDA_DIR}/bin/conda" config --set auto_activate_base true >/dev/null || true
+  as_user "${CONDA_DIR}/bin/conda" config --set changeps1 false >/dev/null || true
+else
+  echo "Warning: conda not found at ${CONDA_DIR}/bin/conda; skipping conda init."
+fi
 
 # -----------------------------------------------------------------------------
 # 8. Set default shell
@@ -408,9 +365,9 @@ as_user "${CONDA_DIR}/bin/conda" config --set changeps1 false >/dev/null || true
 log "Setting zsh as default shell"
 ZSH_BIN="$(command -v zsh)"
 if [[ "${EUID}" -eq 0 ]]; then
-  chsh -s "${ZSH_BIN}" "${TARGET_USER}"
+  chsh -s "${ZSH_BIN}" "${TARGET_USER}" || echo "Warning: chsh failed. You can still run: exec zsh"
 else
-  ${SUDO} chsh -s "${ZSH_BIN}" "${TARGET_USER}"
+  ${SUDO} chsh -s "${ZSH_BIN}" "${TARGET_USER}" || echo "Warning: chsh failed. You can still run: exec zsh"
 fi
 
 # -----------------------------------------------------------------------------
@@ -424,16 +381,9 @@ echo "Verifying installation..."
 echo "  ✓ Zsh: $(zsh --version)"
 echo "  ✓ Oh My Zsh: $([ -d ~/.oh-my-zsh ] && echo 'Installed' || echo 'Not found')"
 echo "  ✓ Conda: $(command -v conda >/dev/null && conda --version || echo 'Not found')"
-<<<<<<< HEAD
-echo "  ✓ nvm: $(command -v nvm >/dev/null && nvm --version || echo 'Not found')"
-echo "  ✓ Node.js: $(command -v node >/dev/null && node --version || echo 'Not found')"
-echo "  ✓ npm: $(command -v npm >/dev/null && npm --version || echo 'Not found')"
-echo "  ✓ Claude Code: $(command -v claude >/dev/null && claude --version || echo 'Not found')"
-=======
 echo "  ✓ nvm: $([ -s ~/.nvm/nvm.sh ] && echo 'Installed' || echo 'Not found')"
 echo "  ✓ Node: $(command -v node >/dev/null && node -v || echo 'Not found')"
 echo "  ✓ npm: $(command -v npm >/dev/null && npm -v || echo 'Not found')"
->>>>>>> e42d01e (d)
 echo "  ✓ eza: $(command -v eza >/dev/null && eza --version | head -1 || echo 'Not found')"
 echo "  ✓ zellij: $(command -v zellij >/dev/null && zellij --version || echo 'Not found')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
@@ -445,10 +395,11 @@ chmod +x /tmp/verify_setup.sh
 # Done
 # -----------------------------------------------------------------------------
 log "Setup complete"
-echo "✅ Done!"
+echo "Done!"
 echo ""
 echo "Next steps:"
 echo "  1. Restart shell: exec zsh"
 echo "  2. Verify: /tmp/verify_setup.sh"
 echo ""
 echo "Note: Icons require a Nerd Font in your terminal."
+
