@@ -9,7 +9,7 @@ git clone http://git.mobilint.com/algorithm-team/compiler/mobilint-compiler.git
 cd /workspace/mobilint-compiler
 mkdir build
 cd build
-cmake .. -DPRODUCT=aries2-v4 -DVENDOR=mobilint -DINCLUDE_JSON=True
+cmake ..
 make -j16
 
 # qbcompiler
@@ -23,5 +23,5 @@ git clone http://git.mobilint.com/algorithm-team/compiler/quantizer.git
 cd /workspace/quantizer
 mkdir build
 cd build
-cmake .. -DPRODUCT=aries2-v4 -DVENDOR=mobilint
+cmake ..
 make -j16
