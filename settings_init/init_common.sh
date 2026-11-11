@@ -290,7 +290,9 @@ install_neovim
 #   imagemagick -> image.nvim (decode/resize, sixel encoding)
 #   mupdf-tools -> pdf-view.nvim (mutool renders PDF pages)
 #   unzip       -> win32yank install
-${SUDO} apt install -y imagemagick mupdf-tools unzip
+#   ripgrep, fd-find -> telescope.nvim (search text, find files)
+#   build-essential  -> compiles telescope-fzf-native (and C/C++ work in general)
+${SUDO} apt install -y imagemagick mupdf-tools unzip ripgrep fd-find build-essential
 install_win32yank
 
 # Check for distro-packaged zsh plugins
@@ -597,6 +599,7 @@ require("lazy").setup({
       opts = {
         spec = {
           { "<leader>b", group = "탭" },
+          { "<leader>f", group = "찾기" },
           { "<leader>u", group = "켜기/끄기" },
         },
       },
@@ -652,6 +655,58 @@ require("lazy").setup({
           },
         },
       },
+    },
+
+    -- ---- Find files / search text (like VS Code's Ctrl+P and Ctrl+Shift+F) ----
+    {
+      "nvim-telescope/telescope.nvim",
+      version = "*",
+      dependencies = {
+        "nvim-lua/plenary.nvim",
+        { "nvim-telescope/telescope-fzf-native.nvim", build = "make" }, -- faster matching
+      },
+      cmd = "Telescope",
+      keys = {
+        { "<C-p>", "<Cmd>Telescope find_files<CR>", desc = "파일 찾기" },
+        { "<leader>ff", "<Cmd>Telescope find_files<CR>", desc = "파일 찾기" },
+        { "<leader>fg", "<Cmd>Telescope live_grep<CR>", desc = "전체 검색 (글자)" },
+        { "<leader>fw", "<Cmd>Telescope grep_string<CR>", desc = "커서 아래 단어 전체 검색" },
+        { "<leader>fr", "<Cmd>Telescope oldfiles<CR>", desc = "최근 연 파일" },
+        { "<leader>fb", "<Cmd>Telescope buffers<CR>", desc = "열린 파일(탭) 목록" },
+      },
+      config = function()
+        local telescope = require("telescope")
+        local actions = require("telescope.actions")
+        local rg_extra = { "--hidden", "--glob", "!**/.git/*" } -- include dotfiles, skip .git
+        telescope.setup({
+          defaults = {
+            sorting_strategy = "ascending",
+            layout_config = { prompt_position = "top" }, -- search box on top, like VS Code
+            mappings = {
+              i = { ["<Esc>"] = actions.close }, -- one Esc closes the popup
+            },
+            -- Never open the chosen file inside the file tree window
+            get_selection_window = function()
+              local cur = vim.api.nvim_get_current_win()
+              if vim.bo[vim.api.nvim_win_get_buf(cur)].filetype ~= "neo-tree" then return 0 end
+              for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+                local buf = vim.api.nvim_win_get_buf(win)
+                if vim.bo[buf].filetype ~= "neo-tree" and vim.api.nvim_win_get_config(win).relative == "" then
+                  return win
+                end
+              end
+              return 0
+            end,
+          },
+          pickers = {
+            find_files = { hidden = true, file_ignore_patterns = { "^%.git/" } },
+            live_grep = { additional_args = rg_extra },
+            grep_string = { additional_args = rg_extra },
+            oldfiles = { only_cwd = true }, -- recent files of this project only
+          },
+        })
+        pcall(telescope.load_extension, "fzf") -- skip quietly if it was not built
+      end,
     },
 
     -- ---- Images: open *.png etc. as pictures, render images in markdown ----
@@ -779,6 +834,8 @@ echo "  ✓ nvim config: $([ -f ~/.config/nvim/init.lua ] && echo 'Installed' ||
 echo "  ✓ ImageMagick: $(command -v convert >/dev/null && convert -version | head -1 | cut -d' ' -f2-3 || echo 'Not found')"
 echo "  ✓ mutool: $(command -v mutool >/dev/null && mutool -v 2>&1 | head -1 || echo 'Not found')"
 echo "  ✓ win32yank: $(command -v win32yank.exe >/dev/null && echo 'Installed' || echo 'Not found (only needed on WSL)')"
+echo "  ✓ ripgrep: $(command -v rg >/dev/null && rg --version | head -1 || echo 'Not found')"
+echo "  ✓ fd: $(command -v fdfind >/dev/null && fdfind --version || echo 'Not found')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
 echo "  ✓ Simplerich: $([ -d ~/.oh-my-zsh/custom/themes/simplerich-zsh-theme ] && echo 'Installed' || echo 'Not found')"
 VERIFY_EOF
