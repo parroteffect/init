@@ -5,8 +5,8 @@ IFS=$'\n\t'
 # =============================================================================
 # System Initialization Script v4.4
 # - Installs: zsh, oh-my-zsh, miniconda, nvm + Node.js LTS, eza/exa, zellij,
-#             neovim (+ image.nvim, pdf-view.nvim), zsh-autosuggestions,
-#             zsh-syntax-highlighting
+#             neovim (+ file tree, tabs, image/PDF viewing), win32yank (WSL),
+#             zsh-autosuggestions, zsh-syntax-highlighting
 # - Theme: simplerich (customized from github.com/parroteffect/zsh-theme)
 # =============================================================================
 
@@ -226,6 +226,45 @@ install_neovim() {
   echo "Installed $(/opt/nvim/bin/nvim --version | head -n 1) to /opt/nvim"
 }
 
+# -----------------------------------------------------------------------------
+# Install win32yank (WSL only): clipboard bridge between Neovim and Windows
+# - Handles UTF-8 (Korean) and CRLF line endings correctly
+# - Neovim picks it up automatically from PATH
+# -----------------------------------------------------------------------------
+install_win32yank() {
+  if ! grep -qi microsoft /proc/version 2>/dev/null; then
+    return 0
+  fi
+
+  if command -v win32yank.exe >/dev/null 2>&1; then
+    echo "win32yank already installed, skipping..."
+    return 0
+  fi
+
+  log "Installing win32yank (WSL clipboard for Neovim)"
+
+  local url tmpdir
+  url="https://github.com/equalsraf/win32yank/releases/download/v0.1.1/win32yank-x64.zip"
+  tmpdir="$(mktemp -d)"
+
+  if ! curl -LfsS --retry 8 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 10 --max-time 120 "${url}" -o "${tmpdir}/win32yank.zip"; then
+    echo "Warning: GitHub download failed. Skipping win32yank install."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  if ! unzip -o -q "${tmpdir}/win32yank.zip" win32yank.exe -d "${tmpdir}"; then
+    echo "Warning: failed to extract win32yank. Skipping."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  ${SUDO} install -m 0755 "${tmpdir}/win32yank.exe" /usr/local/bin/win32yank.exe
+  rm -rf "${tmpdir}"
+  echo "Installed win32yank to /usr/local/bin/win32yank.exe"
+}
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -250,7 +289,9 @@ install_neovim
 # Neovim plugin dependencies:
 #   imagemagick -> image.nvim (decode/resize, sixel encoding)
 #   mupdf-tools -> pdf-view.nvim (mutool renders PDF pages)
-${SUDO} apt install -y imagemagick mupdf-tools
+#   unzip       -> win32yank install
+${SUDO} apt install -y imagemagick mupdf-tools unzip
+install_win32yank
 
 # Check for distro-packaged zsh plugins
 USE_DISTRO_PLUGINS=0
@@ -459,6 +500,69 @@ vim.opt.termguicolors = true
 vim.opt.ignorecase = true
 vim.opt.smartcase = true
 vim.opt.undofile = true
+vim.opt.confirm = true -- :q with unsaved changes asks to save instead of failing
+vim.opt.laststatus = 3 -- one status line at the bottom (like VS Code)
+
+-- `nvim .` leaves an empty [No Name] buffer behind; drop it once a real file is opened
+vim.api.nvim_create_autocmd("BufReadPost", {
+  callback = function(ev)
+    vim.schedule(function()
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if b ~= ev.buf and vim.api.nvim_buf_is_valid(b) and vim.bo[b].buflisted
+          and vim.api.nvim_buf_get_name(b) == "" and vim.bo[b].buftype == ""
+          and not vim.bo[b].modified and vim.api.nvim_buf_line_count(b) == 1
+          and vim.api.nvim_buf_get_lines(b, 0, 1, false)[1] == ""
+          and #vim.fn.win_findbuf(b) == 0 then
+          vim.api.nvim_buf_delete(b, {})
+        end
+      end
+    end)
+  end,
+})
+
+-- ==== Clipboard ====
+-- y/p share the system clipboard (WSL: win32yank.exe). Deferred because
+-- clipboard detection scans PATH, which is slow on WSL.
+vim.schedule(function()
+  if vim.fn.has("clipboard") == 1 then
+    vim.opt.clipboard = "unnamedplus"
+  end
+end)
+
+-- ==== Keymaps (descriptions show up in the Space popup) ====
+vim.keymap.set({ "n", "i", "x" }, "<C-s>", "<Cmd>write<CR>", { desc = "저장" })
+
+-- Undo (u) in smaller steps: break the undo block at , . ; while typing
+for _, ch in ipairs({ ",", ".", ";" }) do
+  vim.keymap.set("i", ch, ch .. "<C-g>u")
+end
+
+-- Close a tab (buffer) like VS Code: if it has unsaved changes, ask
+-- Save / Don't save / Cancel. Keeps the window layout (mini.bufremove).
+local function close_buffer(buf)
+  if buf == nil or buf == 0 then buf = vim.api.nvim_get_current_buf() end
+  local force = false
+  if vim.bo[buf].modified then
+    local name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+    local choice = vim.fn.confirm(
+      ("'%s' 변경 내용을 저장할까요?"):format(name ~= "" and name or "[No Name]"),
+      "&Yes 저장\n&No 저장 안 함\n&Cancel 취소", 1)
+    if choice == 1 then
+      local ok, err = pcall(vim.api.nvim_buf_call, buf, function() vim.cmd("silent write") end)
+      if not ok then
+        vim.notify("저장 실패: " .. tostring(err), vim.log.levels.ERROR)
+        return
+      end
+      vim.cmd("redraw") -- clear the prompt so no "Press ENTER" appears
+      vim.api.nvim_echo({ { "저장됨: " .. name } }, false, {})
+    elseif choice == 2 then
+      force = true
+    else
+      return
+    end
+  end
+  require("mini.bufremove").delete(buf, force)
+end
 
 -- ==== lazy.nvim (plugin manager) ====
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
@@ -486,6 +590,70 @@ end
 
 require("lazy").setup({
   spec = {
+    -- ---- Space popup: lists the available shortcuts ----
+    {
+      "folke/which-key.nvim",
+      event = "VeryLazy",
+      opts = {
+        spec = {
+          { "<leader>b", group = "탭" },
+          { "<leader>u", group = "켜기/끄기" },
+        },
+      },
+    },
+
+    -- ---- File tree on the left (like VS Code's Explorer) ----
+    {
+      "nvim-neo-tree/neo-tree.nvim",
+      branch = "v3.x",
+      dependencies = {
+        "nvim-lua/plenary.nvim",
+        "MunifTanjim/nui.nvim",
+        "nvim-tree/nvim-web-devicons",
+      },
+      lazy = false, -- `nvim .` opens the tree
+      keys = {
+        { "<C-b>", "<Cmd>Neotree toggle<CR>", desc = "파일 트리 열기/닫기" },
+        { "<leader>e", "<Cmd>Neotree focus<CR>", desc = "파일 트리로 이동" },
+      },
+      opts = {
+        close_if_last_window = true, -- closing the last file also closes the tree
+        window = { width = 32 },
+        filesystem = {
+          follow_current_file = { enabled = true }, -- highlight the open file
+          use_libuv_file_watcher = true, -- refresh when files change on disk
+          filtered_items = { hide_dotfiles = false, hide_gitignored = false },
+          hijack_netrw_behavior = "open_default",
+        },
+      },
+    },
+
+    -- ---- Tabs on top (one per open file) ----
+    { "nvim-mini/mini.bufremove", version = "*" }, -- close a file, keep the layout
+    {
+      "akinsho/bufferline.nvim",
+      version = "*",
+      dependencies = { "nvim-tree/nvim-web-devicons", "nvim-mini/mini.bufremove" },
+      lazy = false,
+      keys = {
+        { "<S-l>", "<Cmd>BufferLineCycleNext<CR>", desc = "다음 탭" },
+        { "<S-h>", "<Cmd>BufferLineCyclePrev<CR>", desc = "이전 탭" },
+        { "<leader>x", function() close_buffer(0) end, desc = "탭 닫기" },
+        { "<leader>bo", "<Cmd>BufferLineCloseOthers<CR>", desc = "다른 탭 모두 닫기" },
+      },
+      opts = {
+        options = {
+          -- clicking a tab's X (or right-clicking it) closes it; asks if unsaved
+          close_command = close_buffer,
+          right_mouse_command = close_buffer,
+          always_show_bufferline = true,
+          offsets = {
+            { filetype = "neo-tree", text = "탐색기", text_align = "left", separator = true },
+          },
+        },
+      },
+    },
+
     -- ---- Images: open *.png etc. as pictures, render images in markdown ----
     {
       "3rd/image.nvim",
@@ -515,7 +683,7 @@ require("lazy").setup({
 
         vim.keymap.set("n", "<leader>ui", function()
           if image.is_enabled() then image.disable() else image.enable() end
-        end, { desc = "Toggle image rendering" })
+        end, { desc = "이미지 표시 켜기/끄기" })
 
         if opts.backend ~= "sixel" then return end
 
@@ -610,6 +778,7 @@ echo "  ✓ Neovim: $(command -v nvim >/dev/null && nvim --version | head -1 || 
 echo "  ✓ nvim config: $([ -f ~/.config/nvim/init.lua ] && echo 'Installed' || echo 'Not found')"
 echo "  ✓ ImageMagick: $(command -v convert >/dev/null && convert -version | head -1 | cut -d' ' -f2-3 || echo 'Not found')"
 echo "  ✓ mutool: $(command -v mutool >/dev/null && mutool -v 2>&1 | head -1 || echo 'Not found')"
+echo "  ✓ win32yank: $(command -v win32yank.exe >/dev/null && echo 'Installed' || echo 'Not found (only needed on WSL)')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
 echo "  ✓ Simplerich: $([ -d ~/.oh-my-zsh/custom/themes/simplerich-zsh-theme ] && echo 'Installed' || echo 'Not found')"
 VERIFY_EOF
