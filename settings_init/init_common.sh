@@ -5,8 +5,9 @@ IFS=$'\n\t'
 # =============================================================================
 # System Initialization Script v4.4
 # - Installs: zsh, oh-my-zsh, miniconda, nvm + Node.js LTS, eza/exa, zellij,
-#             neovim (+ file tree, tabs, image/PDF viewing), win32yank (WSL),
-#             zsh-autosuggestions, zsh-syntax-highlighting
+#             neovim (+ file tree, tabs, search, LSP/autocomplete, treesitter,
+#             git signs, image/PDF viewing), tree-sitter CLI,
+#             win32yank + hangul-ime (WSL), zsh-autosuggestions, zsh-syntax-highlighting
 # - Theme: simplerich (customized from github.com/parroteffect/zsh-theme)
 # =============================================================================
 
@@ -166,10 +167,10 @@ install_zellij() {
 
 # -----------------------------------------------------------------------------
 # Install Neovim from the latest GitHub release
-# - apt ships an old version (0.9.x on Ubuntu 24.04); many plugins need >= 0.11
+# - apt ships an old version (0.9.x on Ubuntu 24.04); nvim-treesitter needs >= 0.12
 # - Installs to /opt/nvim and links /usr/local/bin/nvim
 # -----------------------------------------------------------------------------
-NVIM_MIN_VERSION="0.11"
+NVIM_MIN_VERSION="0.12"
 
 install_neovim() {
   local current
@@ -265,6 +266,222 @@ install_win32yank() {
   echo "Installed win32yank to /usr/local/bin/win32yank.exe"
 }
 
+# -----------------------------------------------------------------------------
+# Build hangul-ime.exe (WSL only): Neovim calls it when leaving insert mode so
+# the Windows Korean IME goes back to English and j/k/dd ... work right away.
+# - Compiled from the C# source below with the compiler that ships with Windows
+#   (.NET Framework 4), so no prebuilt binary is downloaded
+# - `hangul-ime.exe en` presses the Han/Eng key only if the IME is in Hangul mode;
+#   `hangul-ime.exe status` prints what it sees (for troubleshooting)
+# -----------------------------------------------------------------------------
+HANGUL_IME_VERSION="1"
+
+install_hangul_ime() {
+  if ! grep -qi microsoft /proc/version 2>/dev/null; then
+    return 0
+  fi
+
+  if [[ -x /usr/local/bin/hangul-ime.exe ]] && [[ "$(/usr/local/bin/hangul-ime.exe version 2>/dev/null \
+      | tr -d '\r')" == "hangul-ime ${HANGUL_IME_VERSION}" ]]; then
+    echo "hangul-ime already installed, skipping..."
+    return 0
+  fi
+
+  log "Building hangul-ime (Korean IME auto-switch for Neovim)"
+
+  local csc tmpdir out
+  csc="/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+  if [[ ! -x "${csc}" ]]; then
+    echo "Warning: Windows C# compiler not found (${csc}). Skipping hangul-ime."
+    return 0
+  fi
+
+  tmpdir="$(as_user mktemp -d)"
+  as_user tee "${tmpdir}/hangul-ime.cs" >/dev/null <<'CS_EOF'
+// hangul-ime: switch the Windows Korean IME of the foreground window to English.
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+static class HangulIme
+{
+    const uint WM_IME_CONTROL = 0x0283;
+    const int IMC_GETCONVERSIONMODE = 0x0001;
+    const int IMC_GETOPENSTATUS = 0x0005;
+    const int IME_CMODE_HANGUL = 0x0001;
+    const ushort VK_HANGUL = 0x15;
+    const uint KEYEVENTF_KEYUP = 0x0002;
+    const uint SMTO_ABORTIFHUNG = 0x0002;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct GUITHREADINFO
+    {
+        public int cbSize, flags;
+        public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+        public RECT rcCaret;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct KEYBDINPUT { public ushort wVk, wScan; public uint dwFlags, time; public IntPtr dwExtraInfo; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct INPUT { public uint type; public InputUnion u; }
+
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+    [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint tid, ref GUITHREADINFO info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int max);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("imm32.dll")] static extern IntPtr ImmGetDefaultIMEWnd(IntPtr hWnd);
+
+    // IME window of the control that has keyboard focus in the foreground app
+    static IntPtr ImeWindow(out IntPtr foreground)
+    {
+        foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr target = foreground;
+        var gti = new GUITHREADINFO();
+        gti.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+        if (GetGUIThreadInfo(GetWindowThreadProcessId(foreground, IntPtr.Zero), ref gti) && gti.hwndFocus != IntPtr.Zero)
+            target = gti.hwndFocus;
+        return ImmGetDefaultIMEWnd(target);
+    }
+
+    static long Query(IntPtr ime, int command)
+    {
+        IntPtr result;
+        if (SendMessageTimeout(ime, WM_IME_CONTROL, (IntPtr)command, IntPtr.Zero, SMTO_ABORTIFHUNG, 200, out result) == IntPtr.Zero)
+            return -1;
+        return result.ToInt64();
+    }
+
+    static void PressHangulKey()
+    {
+        var inputs = new INPUT[2];
+        ushort scan = (ushort)MapVirtualKey(VK_HANGUL, 0);
+        for (int i = 0; i < 2; i++)
+        {
+            inputs[i].type = 1; // INPUT_KEYBOARD
+            inputs[i].u.ki.wVk = VK_HANGUL;
+            inputs[i].u.ki.wScan = scan;
+            inputs[i].u.ki.dwFlags = i == 0 ? 0 : KEYEVENTF_KEYUP;
+        }
+        SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+    }
+
+    static int Main(string[] args)
+    {
+        string cmd = args.Length > 0 ? args[0] : "";
+        if (cmd == "version")
+        {
+            Console.WriteLine("hangul-ime 1");
+            return 0;
+        }
+
+        IntPtr foreground;
+        IntPtr ime = ImeWindow(out foreground);
+        if (ime == IntPtr.Zero) return 2;
+        long conv = Query(ime, IMC_GETCONVERSIONMODE);
+        bool hangul = conv >= 0 && (conv & IME_CMODE_HANGUL) != 0;
+
+        if (cmd == "status")
+        {
+            var cls = new StringBuilder(256);
+            GetClassName(foreground, cls, cls.Capacity);
+            Console.WriteLine("window={0} conversion={1} open={2} -> {3}",
+                cls, conv, Query(ime, IMC_GETOPENSTATUS), hangul ? "hangul" : "english");
+            return 0;
+        }
+        if (cmd == "en")
+        {
+            if (hangul) PressHangulKey();
+            return 0;
+        }
+        Console.Error.WriteLine("usage: hangul-ime.exe en|status|version");
+        return 1;
+    }
+}
+CS_EOF
+
+  if ! out="$(cd "${tmpdir}" && as_user "${csc}" /nologo /optimize /target:exe \
+      /out:hangul-ime.exe hangul-ime.cs 2>&1)" || [[ ! -f "${tmpdir}/hangul-ime.exe" ]]; then
+    echo "${out}"
+    echo "Warning: failed to build hangul-ime. Skipping."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  ${SUDO} install -m 0755 "${tmpdir}/hangul-ime.exe" /usr/local/bin/hangul-ime.exe
+  rm -rf "${tmpdir}"
+  echo "Installed hangul-ime to /usr/local/bin/hangul-ime.exe"
+}
+
+# -----------------------------------------------------------------------------
+# Install tree-sitter CLI from the latest GitHub release
+# - nvim-treesitter uses it to build language parsers (accurate syntax colors)
+# - nvim-treesitter needs >= 0.26.1 and warns against the npm package
+# -----------------------------------------------------------------------------
+TREE_SITTER_MIN_VERSION="0.26.1"
+
+install_tree_sitter_cli() {
+  local current
+  if command -v tree-sitter >/dev/null 2>&1; then
+    current="$(tree-sitter --version 2>/dev/null | awk '{print $2}')"
+    if [[ -n "${current}" && "$(printf '%s\n' "${TREE_SITTER_MIN_VERSION}" "${current}" \
+        | sort -V | head -n 1)" == "${TREE_SITTER_MIN_VERSION}" ]]; then
+      echo "tree-sitter CLI ${current} already installed, skipping..."
+      return 0
+    fi
+  fi
+
+  log "Installing tree-sitter CLI"
+
+  local arch asset url tmpdir
+  arch="$(uname -m)"
+
+  case "${arch}" in
+    x86_64|amd64) asset="tree-sitter-linux-x64" ;;
+    aarch64|arm64) asset="tree-sitter-linux-arm64" ;;
+    *)
+      echo "Warning: unsupported architecture (${arch}). Skipping tree-sitter CLI install."
+      return 0
+      ;;
+  esac
+
+  url="https://github.com/tree-sitter/tree-sitter/releases/latest/download/${asset}.gz"
+  tmpdir="$(mktemp -d)"
+
+  if ! curl -LfsS --retry 8 --retry-all-errors --retry-delay 2 \
+      --connect-timeout 10 --max-time 180 "${url}" -o "${tmpdir}/tree-sitter.gz"; then
+    echo "Warning: GitHub download failed. Skipping tree-sitter CLI install."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  # Make sure the binary actually runs here (it needs a recent glibc)
+  if ! gunzip "${tmpdir}/tree-sitter.gz" || ! chmod +x "${tmpdir}/tree-sitter" \
+      || ! "${tmpdir}/tree-sitter" --version >/dev/null 2>&1; then
+    echo "Warning: downloaded tree-sitter CLI does not run on this system. Skipping."
+    rm -rf "${tmpdir}"
+    return 0
+  fi
+
+  ${SUDO} install -m 0755 "${tmpdir}/tree-sitter" /usr/local/bin/tree-sitter
+  rm -rf "${tmpdir}"
+  echo "Installed $(/usr/local/bin/tree-sitter --version) to /usr/local/bin/tree-sitter"
+}
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -291,9 +508,15 @@ install_neovim
 #   mupdf-tools -> pdf-view.nvim (mutool renders PDF pages)
 #   unzip       -> win32yank install
 #   ripgrep, fd-find -> telescope.nvim (search text, find files)
-#   build-essential  -> compiles telescope-fzf-native (and C/C++ work in general)
-${SUDO} apt install -y imagemagick mupdf-tools unzip ripgrep fd-find build-essential
+#   build-essential  -> compiles telescope-fzf-native and treesitter parsers
+#                       (and C/C++ work in general)
+#   shellcheck       -> bash-language-server uses it to catch shell script mistakes
+#   python3-venv     -> Mason installs Python-based language servers into a venv
+${SUDO} apt install -y imagemagick mupdf-tools unzip ripgrep fd-find build-essential \
+  shellcheck python3-venv
 install_win32yank
+install_hangul_ime
+install_tree_sitter_cli
 
 # Check for distro-packaged zsh plugins
 USE_DISTRO_PLUGINS=0
@@ -478,7 +701,8 @@ fi
 
 # -----------------------------------------------------------------------------
 # 7b. Neovim config (~/.config/nvim/init.lua)
-# - lazy.nvim + image.nvim (images) + pdf-view.nvim (PDFs)
+# - VS Code-like: file tree, tabs, file/text search, LSP + autocomplete,
+#   treesitter colors, git change marks, image/PDF viewing (lazy.nvim plugins)
 # - Graphics: kitty protocol on kitty/Ghostty, sixel elsewhere (Windows Terminal >= 1.22)
 # -----------------------------------------------------------------------------
 log "Configuring Neovim"
@@ -504,6 +728,7 @@ vim.opt.smartcase = true
 vim.opt.undofile = true
 vim.opt.confirm = true -- :q with unsaved changes asks to save instead of failing
 vim.opt.laststatus = 3 -- one status line at the bottom (like VS Code)
+vim.opt.signcolumn = "yes" -- keep the error-marker column so text does not shift
 
 -- `nvim .` leaves an empty [No Name] buffer behind; drop it once a real file is opened
 vim.api.nvim_create_autocmd("BufReadPost", {
@@ -530,6 +755,37 @@ vim.schedule(function()
     vim.opt.clipboard = "unnamedplus"
   end
 end)
+
+-- ==== Reload files changed outside nvim (Claude Code, git checkout, ...) ====
+-- Unsaved edits are never thrown away: nvim asks first if both sides changed.
+vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
+  callback = function()
+    if vim.fn.mode() ~= "c" and vim.fn.getcmdwintype() == "" then
+      vim.cmd("checktime")
+    end
+  end,
+})
+vim.api.nvim_create_autocmd("FileChangedShellPost", {
+  callback = function(ev)
+    vim.notify("바깥에서 바뀐 파일을 다시 불러왔어요: " .. vim.fn.fnamemodify(ev.file, ":t"))
+  end,
+})
+
+-- ==== Korean IME: back to English when leaving insert mode (WSL) ====
+-- hangul-ime.exe (built by init_common.sh) presses Han/Eng only if Hangul is on,
+-- so j/k/dd ... work right after Esc even if you were typing Korean.
+local hangul_ime = "/usr/local/bin/hangul-ime.exe"
+if (vim.uv or vim.loop).fs_stat(hangul_ime) then
+  local function ime_to_english()
+    pcall(vim.system, { hangul_ime, "en" }) -- async, does not block typing
+  end
+  vim.api.nvim_create_autocmd({ "InsertLeave", "CmdlineLeave" }, { callback = ime_to_english })
+  vim.api.nvim_create_autocmd("FocusGained", { -- coming back from another app
+    callback = function()
+      if not vim.api.nvim_get_mode().mode:match("^[iRct]") then ime_to_english() end
+    end,
+  })
+end
 
 -- ==== Keymaps (descriptions show up in the Space popup) ====
 vim.keymap.set({ "n", "i", "x" }, "<C-s>", "<Cmd>write<CR>", { desc = "저장" })
@@ -566,6 +822,40 @@ local function close_buffer(buf)
   require("mini.bufremove").delete(buf, force)
 end
 
+-- ==== Code intelligence (LSP): errors, go to definition, rename ... ====
+vim.diagnostic.config({
+  virtual_text = { spacing = 2, prefix = "●" }, -- show the message at the end of the line
+  severity_sort = true,
+  float = { border = "rounded", source = true },
+})
+
+vim.api.nvim_create_autocmd("LspAttach", {
+  callback = function(ev)
+    local client = vim.lsp.get_client_by_id(ev.data.client_id)
+    -- Python gets two servers; let basedpyright answer hover (K), not ruff
+    if client and client.name == "ruff" then
+      client.server_capabilities.hoverProvider = false
+    end
+
+    local function map(lhs, rhs, desc)
+      vim.keymap.set("n", lhs, rhs, { buffer = ev.buf, desc = desc })
+    end
+    -- one result: jump straight there; several: pick from a popup
+    map("gd", "<Cmd>Telescope lsp_definitions<CR>", "정의로 이동")
+    map("<F12>", "<Cmd>Telescope lsp_definitions<CR>", "정의로 이동")
+    map("<S-F12>", "<Cmd>Telescope lsp_references<CR>", "사용하는 곳 찾기")
+    map("<F2>", vim.lsp.buf.rename, "이름 바꾸기")
+    map("K", function() vim.lsp.buf.hover({ border = "rounded" }) end, "설명 보기")
+    map("<leader>ca", vim.lsp.buf.code_action, "빠른 수정 (코드 액션)")
+    map("<leader>cr", vim.lsp.buf.rename, "이름 바꾸기")
+    map("<leader>cu", "<Cmd>Telescope lsp_references<CR>", "사용하는 곳 찾기")
+    map("<leader>cd", vim.diagnostic.open_float, "이 줄의 에러 보기")
+    map("<leader>cD", "<Cmd>Telescope diagnostics<CR>", "전체 에러 목록")
+    map("<leader>cs", "<Cmd>Telescope lsp_document_symbols<CR>", "이 파일의 함수/클래스 목록")
+    map("<leader>cf", function() vim.lsp.buf.format({ async = true }) end, "코드 정리 (포맷)")
+  end,
+})
+
 -- ==== lazy.nvim (plugin manager) ====
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 if not (vim.uv or vim.loop).fs_stat(lazypath) then
@@ -599,7 +889,9 @@ require("lazy").setup({
       opts = {
         spec = {
           { "<leader>b", group = "탭" },
+          { "<leader>c", group = "코드" },
           { "<leader>f", group = "찾기" },
+          { "<leader>g", group = "Git" },
           { "<leader>u", group = "켜기/끄기" },
         },
       },
@@ -709,6 +1001,102 @@ require("lazy").setup({
       end,
     },
 
+    -- ---- Language servers (Python, C/C++, Shell), installed by Mason ----
+    {
+      "mason-org/mason-lspconfig.nvim",
+      lazy = false,
+      dependencies = {
+        { "mason-org/mason.nvim", opts = {} }, -- :Mason opens the installer window
+        "neovim/nvim-lspconfig", -- ready-made settings for each server
+      },
+      opts = {
+        ensure_installed = { "basedpyright", "ruff", "clangd", "bashls" },
+      },
+      config = function(_, opts)
+        -- basedpyright's default ("recommended") flags almost everything;
+        -- use the usual pyright level instead
+        vim.lsp.config("basedpyright", {
+          settings = { basedpyright = { analysis = { typeCheckingMode = "standard" } } },
+        })
+        require("mason-lspconfig").setup(opts) -- also enables the installed servers
+      end,
+    },
+
+    -- ---- Autocomplete popup while typing (like VS Code IntelliSense) ----
+    {
+      "saghen/blink.cmp",
+      version = "1.*", -- release tag -> prebuilt fuzzy matcher binary
+      dependencies = { "rafamadriz/friendly-snippets" },
+      event = { "InsertEnter", "CmdlineEnter" },
+      opts = {
+        keymap = {
+          preset = "super-tab", -- Tab accepts the suggestion
+          ["<CR>"] = { "accept", "fallback" }, -- Enter accepts too
+        },
+        appearance = { nerd_font_variant = "mono" },
+        completion = { documentation = { auto_show = true, auto_show_delay_ms = 300 } },
+        signature = { enabled = true }, -- show function parameters while typing
+        sources = { default = { "lsp", "path", "snippets", "buffer" } },
+        fuzzy = { implementation = "prefer_rust_with_warning" },
+      },
+    },
+
+    -- ---- Syntax colors from a real parser (treesitter), not regex guesses ----
+    {
+      "nvim-treesitter/nvim-treesitter",
+      branch = "main",
+      lazy = false, -- does not support lazy-loading
+      build = ":TSUpdate",
+      config = function()
+        local ts = require("nvim-treesitter")
+        -- Parsers are compiled (tree-sitter CLI + C compiler) by init_common.sh;
+        -- add more later with :TSInstall <language>
+        local wanted = {
+          "python", "c", "cpp", "bash", "zsh", "lua", "vim", "vimdoc", "query",
+          "markdown", "markdown_inline", "json", "yaml", "toml", "cmake", "make",
+          "diff", "gitcommit", "dockerfile",
+        }
+        if #vim.api.nvim_list_uis() == 0 and vim.fn.executable("tree-sitter") == 1 then
+          local installed = ts.get_installed("parsers")
+          local missing = vim.tbl_filter(function(lang)
+            return not vim.list_contains(installed, lang)
+          end, wanted)
+          if #missing > 0 then pcall(function() ts.install(missing):wait(600000) end) end
+        end
+
+        vim.api.nvim_create_autocmd("FileType", {
+          group = vim.api.nvim_create_augroup("treesitter_colors", { clear = true }),
+          callback = function(ev)
+            -- very large files (logs, generated code): keep the fast regex colors
+            local stat = (vim.uv or vim.loop).fs_stat(vim.api.nvim_buf_get_name(ev.buf))
+            if stat and stat.size > 1024 * 1024 then return end
+            pcall(vim.treesitter.start, ev.buf) -- no parser for this language: skip
+          end,
+        })
+      end,
+    },
+
+    -- ---- Git: changed lines marked next to the line numbers (like VS Code) ----
+    {
+      "lewis6991/gitsigns.nvim",
+      version = "*",
+      event = { "BufReadPre", "BufNewFile" },
+      opts = {
+        on_attach = function(buf)
+          local gs = require("gitsigns")
+          local function map(lhs, rhs, desc)
+            vim.keymap.set("n", lhs, rhs, { buffer = buf, desc = desc })
+          end
+          map("]h", function() gs.nav_hunk("next") end, "다음 변경 위치")
+          map("[h", function() gs.nav_hunk("prev") end, "이전 변경 위치")
+          map("<leader>gp", gs.preview_hunk, "바뀐 내용 미리보기")
+          map("<leader>gr", gs.reset_hunk, "이 변경 되돌리기 (마지막 커밋 상태로)")
+          map("<leader>gb", function() gs.blame_line({ full = true }) end, "이 줄 누가 언제 바꿨나")
+          map("<leader>ub", gs.toggle_current_line_blame, "줄 끝 작성자 표시 켜기/끄기")
+        end,
+      },
+    },
+
     -- ---- Images: open *.png etc. as pictures, render images in markdown ----
     {
       "3rd/image.nvim",
@@ -795,11 +1183,29 @@ require("lazy").setup({
 })
 NVIM_EOF
 
-# Pre-install plugins so the first launch is clean
-echo "Installing Neovim plugins..."
+# Pre-install plugins (and compile treesitter parsers) so the first launch is clean
+echo "Installing Neovim plugins and syntax parsers (first run takes a few minutes)..."
 if command -v nvim >/dev/null 2>&1; then
-  as_user env HOME="${TARGET_HOME}" timeout 300 nvim --headless "+Lazy! sync" +qa >/dev/null 2>&1 \
+  as_user env HOME="${TARGET_HOME}" timeout 900 nvim --headless "+Lazy! sync" +qa >/dev/null 2>&1 \
     || echo "Warning: plugin install did not finish; open nvim and run :Lazy sync"
+fi
+
+# Pre-install the language servers (Mason) that are not installed yet.
+# bash-language-server is an npm package, so load nvm's Node first.
+echo "Installing language servers (can take a few minutes)..."
+MASON_BIN="${TARGET_HOME}/.local/share/nvim/mason/bin"
+MASON_MISSING=""
+for entry in basedpyright:basedpyright-langserver ruff:ruff clangd:clangd \
+             bash-language-server:bash-language-server; do
+  [[ -x "${MASON_BIN}/${entry#*:}" ]] || MASON_MISSING="${MASON_MISSING} ${entry%%:*}"
+done
+if [[ -z "${MASON_MISSING}" ]]; then
+  echo "Language servers already installed, skipping..."
+elif command -v nvim >/dev/null 2>&1; then
+  as_user env HOME="${TARGET_HOME}" NVM_DIR="${NVM_DIR}" MASON_PKGS="${MASON_MISSING}" bash -c '
+    [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+    timeout 900 nvim --headless -c "MasonInstall ${MASON_PKGS}" -c qall
+  ' >/dev/null 2>&1 || echo "Warning: some language servers did not install; open nvim and run :Mason"
 fi
 
 # -----------------------------------------------------------------------------
@@ -836,6 +1242,10 @@ echo "  ✓ mutool: $(command -v mutool >/dev/null && mutool -v 2>&1 | head -1 |
 echo "  ✓ win32yank: $(command -v win32yank.exe >/dev/null && echo 'Installed' || echo 'Not found (only needed on WSL)')"
 echo "  ✓ ripgrep: $(command -v rg >/dev/null && rg --version | head -1 || echo 'Not found')"
 echo "  ✓ fd: $(command -v fdfind >/dev/null && fdfind --version || echo 'Not found')"
+echo "  ✓ tree-sitter: $(command -v tree-sitter >/dev/null && tree-sitter --version || echo 'Not found')"
+echo "  ✓ Syntax parsers: $(ls ~/.local/share/nvim/site/parser 2>/dev/null | sed 's/\.so$//' | tr '\n' ' ' || echo 'Not found')"
+echo "  ✓ hangul-ime: $(command -v hangul-ime.exe >/dev/null && echo 'Installed' || echo 'Not found (only needed on WSL)')"
+echo "  ✓ Language servers: $(ls ~/.local/share/nvim/mason/bin 2>/dev/null | tr '\n' ' ' || echo 'Not found')"
 echo "  ✓ Theme: $(grep '^ZSH_THEME=' ~/.zshrc 2>/dev/null || echo 'Not set')"
 echo "  ✓ Simplerich: $([ -d ~/.oh-my-zsh/custom/themes/simplerich-zsh-theme ] && echo 'Installed' || echo 'Not found')"
 VERIFY_EOF
