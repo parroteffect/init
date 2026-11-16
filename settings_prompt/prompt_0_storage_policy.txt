@@ -6,13 +6,14 @@
 - 순수 연구 논의·설계·코드 검토에는 디렉터리 생성이나 storage 점검을 요구하지 않는다.
 
 ## 2. 저장 위치
+- 아래의 {BULK_ROOT}는 대용량 local storage root다. 환경변수 BULK_ROOT가 설정되어 있으면 그 값을, 없거나 비어 있으면 /workspace/bulk를 사용한다. 사용자에게 전달하는 script·config도 같은 규칙으로 경로를 정한다(예: shell에서는 ${BULK_ROOT:-/workspace/bulk}).
 - 공유 Hugging Face 모델 다운로드 및 관련 tokenizer/config:
-  /workspace/_hdd/models/hf/
+  {BULK_ROOT}/models/hf/
 - 공유 Hugging Face dataset 원본 및 일반적인 dataset-loading cache:
-  /workspace/_hdd/datasets/hf/
+  {BULK_ROOT}/datasets/hf/
   필요하면 Hub 원본은 hub/, Arrow·index 등은 processed/ 하위로 구분한다.
 - 그 외 프로젝트별 대용량 데이터 및 산출물:
-  /workspace/_hdd/{PROJECT_NAME}/
+  {BULK_ROOT}/{PROJECT_NAME}/
   예: checkpoints, 학습·양자화된 모델 export, 프로젝트 전용 전처리 결과, rollout dump, 평가 산출물, 대용량 로그, 보조 cache, 대용량 임시 파일.
 - PROJECT_NAME은 프로젝트에 이미 정해진 식별자를 사용한다. 없으면 원본 repository 이름을 기준으로 정하고 명시한다. 현재 하위 디렉터리·임시 worktree·branch·agent 이름으로 매번 바꾸지 않는다. 동일 프로젝트의 모든 agent가 같은 값을 사용한다.
 - 소스코드, 작은 설정·manifest·문서·요약 보고서 및 실제로 작은 synthetic test fixture는 repository에 유지한다. 일반적인 로컬 파일 생성까지 금지하는 정책이 아니다.
@@ -23,13 +24,13 @@
 - HF_DATASETS_CACHE만 바꾸면 dataset 원본의 Hub 다운로드 cache까지 바뀐다고 가정하지 않는다.
 - 설치된 라이브러리와 실제 호출 경로에 맞춰 cache_dir, download_dir, local_dir 또는 대응 설정을 사용하여 모델과 dataset이 각각 지정된 root에 저장되도록 한다. 지원되지 않는 인자나 환경변수를 만들어 쓰지 않는다.
 - 엄격한 분리가 필요하면 dataset 전용 준비 프로세스에서 다음을 사용할 수 있다.
-  HF_HUB_CACHE=/workspace/_hdd/datasets/hf/hub
-  HF_DATASETS_CACHE=/workspace/_hdd/datasets/hf/processed
-  별도 모델 다운로드 프로세스는 /workspace/_hdd/models/hf/를 사용한다.
+  HF_HUB_CACHE={BULK_ROOT}/datasets/hf/hub
+  HF_DATASETS_CACHE={BULK_ROOT}/datasets/hf/processed
+  별도 모델 다운로드 프로세스는 {BULK_ROOT}/models/hf/를 사용한다.
 - 대안으로 Hub API에 dataset repository type과 dataset root 하위 cache_dir를 명시해 필요한 파일만 받은 뒤, 그 로컬 파일을 읽는다. 경로 검증만을 위해 전체 dataset repository를 다운로드하지 않는다.
 - 한 프로세스에서 모델과 dataset을 함께 로드할 때에는 명시적인 호출별 경로 또는 미리 준비한 로컬 경로를 사용한다. import 이후 환경변수를 번갈아 바꾸어 routing하려 하지 않는다.
 - 환경변수는 관련 라이브러리 import 전에 설정하고, 실제 I/O를 수행하는 subprocess·worker에도 전달한다.
-- 사용되는 HF_XET_CACHE, HF_ASSETS_CACHE 등 대용량 보조 cache는 /workspace/_hdd/{PROJECT_NAME}/cache/ 아래로, 대용량 임시 데이터는 해당 프로젝트의 tmp/ 아래로 보낸다.
+- 사용되는 HF_XET_CACHE, HF_ASSETS_CACHE 등 대용량 보조 cache는 {BULK_ROOT}/{PROJECT_NAME}/cache/ 아래로, 대용량 임시 데이터는 해당 프로젝트의 tmp/ 아래로 보낸다.
 - HF_HOME을 무조건 변경하지 않는다. 인증정보 위치도 영향을 받으므로 기존의 private token/login 저장 위치를 보존하고, 인증정보를 공유 cache 디렉터리에 복사하지 않는다.
 
 ## 4. 코드와 agent 간 전달
@@ -43,7 +44,7 @@
 
 ## 5. 실제 I/O 전 확인 및 실패 처리
 - 허가된 대용량 다운로드·쓰기 직전에 대상 경로, 실제 경로 해석, 쓰기 권한, 여유 공간, backing mount 또는 symlink 대상을 확인한다.
-- /workspace/_hdd라는 디렉터리가 존재하는 것만으로 의도한 storage volume이 연결되었다고 판단하지 않는다. 환경에 알려진 mount 설정이 있으면 대조한다.
+- {BULK_ROOT} 디렉터리가 존재하는 것만으로 의도한 storage volume이 연결되었다고 판단하지 않는다. 환경에 알려진 mount 설정이 있으면 대조한다.
 - 승인된 storage root가 정상적으로 사용 가능한 것을 확인한 후 필요한 하위 디렉터리만 생성한다. 누락된 mount를 일반 로컬 디렉터리로 만들어 대신 사용하지 않는다.
 - Storage가 없거나 공간·권한·sandbox 문제로 사용할 수 없으면 해당 I/O만 중단하고 원인을 알린다. Repository, home cache, 로컬 임시 경로 또는 다른 volume으로 조용히 fallback하지 않는다. Sandbox 권한을 임의로 확대하지 않는다.
 - 영향을 받지 않는 연구 추론·설계·구현·정적 검증은 계속 진행한다.
