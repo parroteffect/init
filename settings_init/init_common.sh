@@ -1171,9 +1171,15 @@ require("lazy").setup({
       "rohit746/pdf-view.nvim",
       lazy = false, -- must hook *.pdf before a PDF given on the command line is read
       opts = {
-        -- Windows Terminal does not report its pixel size over WSL, but its sixel
-        -- always uses a fixed virtual 10x20 px cell (microsoft/terminal#17504)
-        cell_size = (vim.env.WT_SESSION and not has_kitty_graphics()) and { 10, 20 } or nil,
+        -- Windows Terminal does not report its pixel size (WSL, docker exec, ssh), but its
+        -- sixel always uses a fixed virtual 10x20 px cell (microsoft/terminal#17504).
+        -- WT_SESSION does not reach a container or ssh shell (only TERM=xterm does), so every
+        -- plain non-Kitty session gets that cell; zellij (draws Kitty graphics itself and
+        -- reports its own cell size) and Kitty-graphics terminals keep auto-detection.
+        cell_size = (not has_kitty_graphics() and (vim.env.ZELLIJ or "") == "") and { 10, 20 } or nil,
+        -- TERM=xterm alone is not recognised as a sixel terminal, so say sixel outright
+        -- instead of waiting for the terminal's DA1 reply.
+        protocol = (not has_kitty_graphics() and (vim.env.ZELLIJ or "") == "") and "sixel" or "auto",
       },
     },
   },
