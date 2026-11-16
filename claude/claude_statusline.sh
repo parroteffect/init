@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Claude Code status line 설정: 모델 | effort | 주간 남은 사용량 | context 사용량
-# 사용법: bash setup_statusline.sh
+# 사용법: bash claude_statusline.sh
 set -euo pipefail
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
